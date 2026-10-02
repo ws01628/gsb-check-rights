@@ -26,7 +26,7 @@ if admin_pwd == ADMIN_PASSWORD:
         if st.sidebar.button("นำเข้าและอัปเดตข้อมูล (แทนที่เดิม)"):
             try:
                 df = None
-                # ลองอ่านไฟล์กรณีไฟล์ติดรหัสผ่าน GSBCENTER
+                # ลองอ่านไฟล์กรณีติดรหัสผ่าน GSBCENTER
                 try:
                     decrypted_data = io.BytesIO()
                     office_file = msoffcrypto.OfficeFile(uploaded_file)
@@ -34,16 +34,16 @@ if admin_pwd == ADMIN_PASSWORD:
                     office_file.decrypt(decrypted_data)
                     df = pd.read_excel(decrypted_data, dtype=str)
                 except Exception:
-                    # ถ้าไฟล์ไม่ได้ตั้งรหัสผ่าน หรือถอดรหัสไม่สำเร็จ ให้ลองอ่านตรงๆ
+                    # ถ้าไฟล์ไม่มีรหัสผ่าน
                     uploaded_file.seek(0)
                     df = pd.read_excel(uploaded_file, dtype=str)
                 
                 if df is not None:
-                    # ลบช่องว่างส่วนเกินออกจากชื่อคอลัมน์
+                    # เคลียร์ชื่อคอลัมน์และแปลงค่าเป็น string ทั้งหมด
                     df.columns = [str(c).strip() for c in df.columns]
+                    df = df.fillna('')
                     st.session_state["df_gsb"] = df
                     
-                    # บันทึกวันที่อัปเดตเป็น พ.ศ.
                     today = datetime.datetime.now()
                     year_buddhism = today.year + 543
                     st.session_state["version_update"] = f"{today.day}/{today.month}/{year_buddhism}"
@@ -68,34 +68,57 @@ if cid_input:
     if df is None:
         st.warning("⚠️ ยังไม่มีข้อมูลในระบบ กรุณาให้ Admin อัปโหลดไฟล์ประจำเดือนก่อนครับ")
     else:
-        # หาคอลัมน์เลขบัตรประชาชนอัตโนมัติ
+        # ค้นหาคอลัมน์เลขบัตรประชาชน
         col_cid_candidates = [c for c in df.columns if any(k in str(c) for k in ['ประชาชน', 'ID', 'เลข', 'บัตร'])]
         col_cid = col_cid_candidates[0] if col_cid_candidates else df.columns[0]
         
+        # ค้นหาแถวที่ตรงกับ CID
         result = df[df[col_cid].astype(str).str.strip() == cid_clean]
         
         if not result.empty:
             row = result.iloc[0]
             st.markdown("<h3 style='color: green;'>ผลการตรวจสอบ &nbsp;&nbsp;&nbsp;&nbsp; <b>ใช้สิทธิได้</b></h3>", unsafe_allow_html=True)
             
-            # ดึงค่าคอลัมน์ต่างๆ
-            def get_val(keys):
-                for k in keys:
+            # ฟังก์ชันค้นหาค่าจากคอลัมน์ที่เข้าข่าย
+            def get_col_val(keywords):
+                for kw in keywords:
                     for c in df.columns:
-                        if k in c:
-                            return row[c]
-                return '-'
+                        if kw in str(c):
+                            val = str(row[c]).strip()
+                            if val and val.lower() != 'nan':
+                                return val
+                return ''
 
-            name_val = get_val(['ชื่อ', 'นามสกุล', 'ผู้มีสิทธิ'])
-            emp_id_val = get_val(['รหัสพนักงาน', 'พนักงาน'])
-            start_date_val = get_val(['เริ่ม', 'วันเริ่ม'])
-            end_date_val = get_val(['สิ้นสุด', 'หมดสิทธิ', 'วันสิ้นสุด'])
-            unit_val = get_val(['หน่วยงาน', 'สังกัด', 'ฝ่าย'])
+            # 1. จัดการชื่อ-นามสกุล
+            title = get_col_val(['คำนำ', 'คำนำหน้า'])
+            fname = get_col_val(['ชื่อผู้', 'ชื่อ'])
+            lname = get_col_val(['สกุล', 'นามสกุล'])
+            
+            # ถ้านามสกุลรวมอยู่ในคอลัมน์ชื่อแล้ว ไม่ต้องต่อซ้ำ
+            if lname and lname in fname:
+                full_name = f"{title} {fname}".strip()
+            else:
+                full_name = f"{title} {fname} {lname}".strip()
+            if not full_name:
+                full_name = get_col_val(['ผู้มีสิทธิ', 'พนักงาน'])
 
-            st.markdown(f"**1. ชื่อ ผู้มีสิทธิ** &nbsp;&nbsp;&nbsp;&nbsp; {name_val}")
-            st.markdown(f"**2. รหัสพนักงาน** &nbsp;&nbsp;&nbsp;&nbsp; {emp_id_val}")
-            st.markdown(f"**3. วันเริ่มใช้สิทธิ** &nbsp;&nbsp;&nbsp;&nbsp; {start_date_val}")
-            st.markdown(f"**4. วันสิ้นสุดการใช้สิทธิ** &nbsp;&nbsp;&nbsp;&nbsp; {end_date_val}")
-            st.markdown(f"**5. หน่วยงาน** &nbsp;&nbsp;&nbsp;&nbsp; {unit_val}")
+            # 2. รหัสพนักงาน
+            emp_id = get_col_val(['รหัสพนักงาน', 'รหัสพนง', 'เลขพนักงาน', 'พนักงาน'])
+
+            # 3. วันเริ่มใช้สิทธิ
+            start_date = get_col_val(['เริ่ม', 'วันเริ่ม', 'วันที่เริ่ม', 'ตั้งแต่วันที่', 'Effective'])
+
+            # 4. วันสิ้นสุดการใช้สิทธิ
+            end_date = get_col_val(['สิ้นสุด', 'หมดสิทธิ', 'วันที่หมด', 'ถึงวันที่', 'Expire'])
+
+            # 5. หน่วยงาน
+            unit_val = get_col_val(['หน่วยงาน', 'สังกัด', 'ศูนย์', 'เขต', 'ฝ่าย', 'สาขา', 'ตำแหน่ง'])
+
+            # แสดงผลตามรูปแบบ
+            st.markdown(f"**1. ชื่อ ผู้มีสิทธิ** &nbsp;&nbsp;&nbsp;&nbsp; {full_name if full_name else '-'}")
+            st.markdown(f"**2. รหัสพนักงาน** &nbsp;&nbsp;&nbsp;&nbsp; {emp_id if emp_id else '-'}")
+            st.markdown(f"**3. วันเริ่มใช้สิทธิ** &nbsp;&nbsp;&nbsp;&nbsp; {start_date if start_date else '-'}")
+            st.markdown(f"**4. วันสิ้นสุดการใช้สิทธิ** &nbsp;&nbsp;&nbsp;&nbsp; {end_date if end_date else '-'}")
+            st.markdown(f"**5. หน่วยงาน** &nbsp;&nbsp;&nbsp;&nbsp; {unit_val if unit_val else '-'}")
         else:
             st.markdown("<h3 style='color: red;'>ผลการตรวจสอบ &nbsp;&nbsp;&nbsp;&nbsp; <b>ไม่พบข้อมูล / หมดสิทธิ</b></h3>", unsafe_allow_html=True)
