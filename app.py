@@ -1,3 +1,4 @@
+import os
 import io
 import datetime
 import pandas as pd
@@ -7,13 +8,46 @@ import msoffcrypto
 st.set_page_config(page_title="ค้นหาข้อมูลสิทธิการรักษาพยาบาลพนักงานธนาคารออมสิน", layout="centered", page_icon="🏥")
 
 ADMIN_PASSWORD = "GSBADMINCENTER"
+DEFAULT_FILE_PATH = "GSB-OK.xlsx"
 
-if "df_gsb" not in st.session_state:
-    st.session_state["df_gsb"] = None
-if "version_update" not in st.session_state:
-    st.session_state["version_update"] = "ยังไม่มีการอัปโหลดข้อมูล"
+# --- ฟังก์ชันสำหรับโหลดและอ่านไฟล์ Excel (ถอดรหัสรหัสผ่าน GSBCENTER อัตโนมัติ) ---
+def load_excel_data(file_source):
+    df = None
+    try:
+        # ลองถอดรหัสกรณีไฟล์ล็อกรหัสผ่าน GSBCENTER
+        decrypted_data = io.BytesIO()
+        office_file = msoffcrypto.OfficeFile(file_source)
+        office_file.load_key(password="GSBCENTER")
+        office_file.decrypt(decrypted_data)
+        df = pd.read_excel(decrypted_data, dtype=str)
+    except Exception:
+        # ถ้าไม่มีรหัสผ่าน
+        if hasattr(file_source, 'seek'):
+            file_source.seek(0)
+        df = pd.read_excel(file_source, dtype=str)
+    
+    if df is not None:
+        df.columns = [" ".join(str(c).split()) for c in df.columns]
+        df = df.fillna('')
+    return df
 
-# --- เช็กว่าผู้ใช้เข้าลิงก์แบบ Admin หรือไม่ (?mode=admin) ---
+# --- โหลดข้อมูลตั้งต้นจากไฟล์ GSB-OK.xlsx บน GitHub ถ้ายังไม่ได้อัปโหลด ---
+if "df_gsb" not in st.session_state or st.session_state["df_gsb"] is None:
+    if os.path.exists(DEFAULT_FILE_PATH):
+        try:
+            with open(DEFAULT_FILE_PATH, "rb") as f:
+                st.session_state["df_gsb"] = load_excel_data(f)
+            mod_time = datetime.datetime.fromtimestamp(os.path.getmtime(DEFAULT_FILE_PATH))
+            year_buddhism = mod_time.year + 543
+            st.session_state["version_update"] = f"{mod_time.day}/{mod_time.month}/{year_buddhism}"
+        except Exception:
+            st.session_state["df_gsb"] = None
+            st.session_state["version_update"] = "ยังไม่มีการอัปโหลดข้อมูล"
+    else:
+        st.session_state["df_gsb"] = None
+        st.session_state["version_update"] = "ยังไม่มีการอัปโหลดข้อมูล"
+
+# --- เช็กว่าเป็นโหมด Admin หรือไม่ (?mode=admin) ---
 query_params = st.query_params
 is_admin_mode = query_params.get("mode") == "admin"
 
@@ -28,33 +62,19 @@ if is_admin_mode:
         if uploaded_file is not None:
             if st.sidebar.button("นำเข้าและอัปเดตข้อมูล (แทนที่เดิม)"):
                 try:
-                    df = None
-                    try:
-                        decrypted_data = io.BytesIO()
-                        office_file = msoffcrypto.OfficeFile(uploaded_file)
-                        office_file.load_key(password="GSBCENTER")
-                        office_file.decrypt(decrypted_data)
-                        df = pd.read_excel(decrypted_data, dtype=str)
-                    except Exception:
-                        uploaded_file.seek(0)
-                        df = pd.read_excel(uploaded_file, dtype=str)
-                    
+                    df = load_excel_data(uploaded_file)
                     if df is not None:
-                        df.columns = [" ".join(str(c).split()) for c in df.columns]
-                        df = df.fillna('')
                         st.session_state["df_gsb"] = df
-                        
                         today = datetime.datetime.now()
                         year_buddhism = today.year + 543
                         st.session_state["version_update"] = f"{today.day}/{today.month}/{year_buddhism}"
-                        
                         st.sidebar.success("✅ อัปโหลดและปรับปรุงข้อมูลเรียบร้อยแล้ว!")
                 except Exception as e:
                     st.sidebar.error(f"❌ ไม่สามารถอ่านไฟล์ Excel ได้: {e}")
     elif admin_pwd:
         st.sidebar.error("รหัสผ่าน Admin ไม่ถูกต้อง")
 
-# --- หน้าจอหลักสำหรับผู้ใช้งานทุกคน ---
+# --- หน้าจอหลักสำหรับผู้ใช้งาน ---
 st.markdown("<h2 style='text-align: center; color: #003366;'>ค้นหาข้อมูลสิทธิการรักษาพยาบาลพนักงานธนาคารออมสิน</h2>", unsafe_allow_html=True)
 st.markdown(f"<h4 style='text-align: center;'>Version Update : <span style='color: red;'>{st.session_state['version_update']}</span></h4>", unsafe_allow_html=True)
 st.markdown("---")
