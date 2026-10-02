@@ -34,13 +34,13 @@ if admin_pwd == ADMIN_PASSWORD:
                     office_file.decrypt(decrypted_data)
                     df = pd.read_excel(decrypted_data, dtype=str)
                 except Exception:
-                    # ถ้าไฟล์ไม่มีรหัสผ่าน
+                    # ถ้าไฟล์ไม่ได้ตั้งรหัสผ่าน
                     uploaded_file.seek(0)
                     df = pd.read_excel(uploaded_file, dtype=str)
                 
                 if df is not None:
-                    # เคลียร์ชื่อคอลัมน์และแปลงค่าเป็น string ทั้งหมด
-                    df.columns = [str(c).strip() for c in df.columns]
+                    # ทำความสะอาดชื่อคอลัมน์ (ตัดช่องว่างซ้ำซ้อน)
+                    df.columns = [" ".join(str(c).split()) for c in df.columns]
                     df = df.fillna('')
                     st.session_state["df_gsb"] = df
                     
@@ -68,53 +68,60 @@ if cid_input:
     if df is None:
         st.warning("⚠️ ยังไม่มีข้อมูลในระบบ กรุณาให้ Admin อัปโหลดไฟล์ประจำเดือนก่อนครับ")
     else:
-        # ค้นหาคอลัมน์เลขบัตรประชาชน
-        col_cid_candidates = [c for c in df.columns if any(k in str(c) for k in ['ประชาชน', 'ID', 'เลข', 'บัตร'])]
-        col_cid = col_cid_candidates[0] if col_cid_candidates else df.columns[0]
+        # 1. ค้นหาคอลัมน์เลขบัตรประชาชน
+        col_cid = None
+        for c in df.columns:
+            if any(k in c for k in ['ประชาชน', 'ID', 'เลขบัตร', 'CITIZEN', 'PID']):
+                col_cid = c
+                break
+        if not col_cid:
+            col_cid = df.columns[0]
         
-        # ค้นหาแถวที่ตรงกับ CID
+        # ค้นหาแถวที่มีเลขบัตรประชาชนตรงกัน
         result = df[df[col_cid].astype(str).str.strip() == cid_clean]
         
         if not result.empty:
             row = result.iloc[0]
             st.markdown("<h3 style='color: green;'>ผลการตรวจสอบ &nbsp;&nbsp;&nbsp;&nbsp; <b>ใช้สิทธิได้</b></h3>", unsafe_allow_html=True)
             
-            # ฟังก์ชันค้นหาค่าจากคอลัมน์ที่เข้าข่าย
-            def get_col_val(keywords):
+            # ฟังก์ชันค้นหาค่าตาม Keyword ยืดหยุ่น
+            def find_value(keywords):
                 for kw in keywords:
-                    for c in df.columns:
-                        if kw in str(c):
-                            val = str(row[c]).strip()
-                            if val and val.lower() != 'nan':
+                    for col in df.columns:
+                        if kw.lower() in col.lower():
+                            val = str(row[col]).strip()
+                            if val and val.lower() != 'nan' and val != 'None':
+                                # จัดการฟอร์แมตวันที่กรณีเป็น Timestamp
+                                if '00:00:00' in val:
+                                    val = val.split()[0]
                                 return val
                 return ''
 
-            # 1. จัดการชื่อ-นามสกุล
-            title = get_col_val(['คำนำ', 'คำนำหน้า'])
-            fname = get_col_val(['ชื่อผู้', 'ชื่อ'])
-            lname = get_col_val(['สกุล', 'นามสกุล'])
+            # 1. ชื่อ-นามสกุล
+            title = find_value(['คำนำหน้า', 'คำนำ'])
+            fname = find_value(['ชื่อผู้มีสิทธิ', 'ชื่อพนักงาน', 'ชื่อ'])
+            lname = find_value(['นามสกุล', 'สกุล'])
             
-            # ถ้านามสกุลรวมอยู่ในคอลัมน์ชื่อแล้ว ไม่ต้องต่อซ้ำ
             if lname and lname in fname:
                 full_name = f"{title} {fname}".strip()
             else:
                 full_name = f"{title} {fname} {lname}".strip()
             if not full_name:
-                full_name = get_col_val(['ผู้มีสิทธิ', 'พนักงาน'])
+                full_name = find_value(['ผู้มีสิทธิ', 'NAME'])
 
             # 2. รหัสพนักงาน
-            emp_id = get_col_val(['รหัสพนักงาน', 'รหัสพนง', 'เลขพนักงาน', 'พนักงาน'])
+            emp_id = find_value(['รหัสพนักงาน', 'รหัสพนง', 'EMP_ID', 'STAFF_ID'])
 
             # 3. วันเริ่มใช้สิทธิ
-            start_date = get_col_val(['เริ่ม', 'วันเริ่ม', 'วันที่เริ่ม', 'ตั้งแต่วันที่', 'Effective'])
+            start_date = find_value(['เริ่มใช้สิทธิ', 'วันเริ่ม', 'ตั้งแต่วันที่', 'วันที่เริ่ม', 'EFFECTIVE', 'START'])
 
             # 4. วันสิ้นสุดการใช้สิทธิ
-            end_date = get_col_val(['สิ้นสุด', 'หมดสิทธิ', 'วันที่หมด', 'ถึงวันที่', 'Expire'])
+            end_date = find_value(['สิ้นสุดการใช้สิทธิ', 'วันสิ้นสุด', 'ถึงวันที่', 'วันที่หมด', 'หมดสิทธิ', 'EXPIRE', 'END'])
 
             # 5. หน่วยงาน
-            unit_val = get_col_val(['หน่วยงาน', 'สังกัด', 'ศูนย์', 'เขต', 'ฝ่าย', 'สาขา', 'ตำแหน่ง'])
+            unit_val = find_value(['หน่วยงาน', 'สังกัด', 'ศูนย์/เขต', 'ศูนย์', 'เขต', 'ฝ่าย', 'สาขา', 'ตำแหน่ง', 'ORG', 'DEPARTMENT'])
 
-            # แสดงผลตามรูปแบบ
+            # แสดงผล 5 ข้อตรงตามแบบ
             st.markdown(f"**1. ชื่อ ผู้มีสิทธิ** &nbsp;&nbsp;&nbsp;&nbsp; {full_name if full_name else '-'}")
             st.markdown(f"**2. รหัสพนักงาน** &nbsp;&nbsp;&nbsp;&nbsp; {emp_id if emp_id else '-'}")
             st.markdown(f"**3. วันเริ่มใช้สิทธิ** &nbsp;&nbsp;&nbsp;&nbsp; {start_date if start_date else '-'}")
